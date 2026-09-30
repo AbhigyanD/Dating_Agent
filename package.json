@@ -1,0 +1,12 @@
+{
+  "name": "agentic-dating",
+  "version": "1.0.0",
+  "description": "Every person is an agent. The agents date each other. Rankings fall out.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node scripts/seed.mjs",
+    "test": "node scripts/smoke.mjs"
+  },
+  "engines": { "node": ">=20" }
+}
