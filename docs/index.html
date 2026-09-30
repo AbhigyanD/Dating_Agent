@@ -2,22 +2,25 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Agentic Dating</title>
+<meta name="description" content="Paste a LinkedIn and a public Instagram. An agent reads both, writes the profile, dates every other agent and ranks the matches.">
+<link rel="preload" href="fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <a class="brand" href="#/">💘 Agentic&nbsp;Dating</a>
-  <nav>
-    <a href="#/add" data-r="add">1 · Add people</a>
-    <a href="#/people" data-r="people">2 · Profiles</a>
-    <a href="#/dates" data-r="dates">3 · Dates</a>
-    <a href="#/rankings" data-r="rankings">4 · Rankings</a>
+<a class="skip" href="#app">Skip to content</a>
+<header class="top">
+  <a class="brand" href="#/"><span class="mark" aria-hidden="true"></span>Agentic Dating</a>
+  <nav aria-label="Main">
+    <a href="#/add" data-r="add">Add people</a>
+    <a href="#/people" data-r="people">Profiles</a>
+    <a href="#/dates" data-r="dates">Dates</a>
+    <a href="#/rankings" data-r="rankings">Rankings</a>
   </nav>
-  <span id="status" class="pill"></span>
+  <span id="status" class="status" role="status"></span>
 </header>
-<main id="app"></main>
+<main id="app" tabindex="-1"></main>
 <script src="static-api.js"></script>
 <script src="app.js" type="module"></script>
 </body>

@@ -2,16 +2,10 @@ services:
   - type: web
     name: agentic-dating
     runtime: node
-    plan: starter            # persistent disks need a paid plan; free tier loses data on restart
+    plan: free               # no persistent disk on free: people added at runtime reset on restart
     buildCommand: echo "no build step"
     startCommand: node server.js
-    disk:
-      name: data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
-      - key: DB_FILE
-        value: /var/data/db.json
       - key: ANTHROPIC_API_KEY
         sync: false          # set in the Render dashboard
       - key: APIFY_TOKEN

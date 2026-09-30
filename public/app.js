@@ -5,145 +5,262 @@ const api = async (path, opts) => {
   const r = await fetch('/api' + path, opts && { method: opts.method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(opts.body) });
   const j = await r.json(); if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), j); return j;
 };
-const cls = s => (s >= 75 ? 'hi' : s >= 55 ? 'mid' : 'lo');
+const hi = s => (s >= 75 ? 'hi' : '');
 let timer = null, nav = 0, cache = { people: [] };
 const nameOf = id => cache.people.find(p => p.id === id)?.name || id;
+const keyOf = (a, b) => (a < b ? `${a}__${b}` : `${b}__${a}`);
+const hue = id => [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+const initials = n => String(n).split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+const av = (id, name, size = 40) => `<span class="av" style="--h:${hue(id)};--s:${size}px" aria-hidden="true">${esc(initials(name))}</span>`;
+const pct = x => Math.round(x * 100);
+const srcName = s => ({ linkedin: 'LinkedIn', instagram: 'Instagram' }[s] || s);
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const empty = (title, body, action = '') => `<div class="empty"><b>${title}</b><p>${body}</p>${action}</div>`;
+const STAGES = { coffee: 'Coffee', activity: 'Activity', 'deep-talk': 'Deep talk' };
+// two-click confirm instead of confirm(), which some embeds block
+const confirmTwice = (btn, label, action) => { btn.onclick = async () => { if (btn.dataset.sure !== '1') { btn.dataset.sure = '1'; btn.textContent = label; return; } btn.disabled = true; await action(); }; };
 
 async function refreshStatus() {
   const s = await api('/status');
-  $('#status').textContent = `${s.people} people · ${s.dates} dates · ${s.llm ? 'Claude agents' : 'built-in agents'}${s.apify ? ' · Apify' : ''}`;
+  $('#status').textContent = `${s.people} people, ${s.dates} dates, ${s.llm ? 'Claude agents' : 'built-in agents'}`;
   return s;
 }
 
 const routes = { '': home, add: addView, people: peopleView, p: profileView, dates: datesView, d: dateView, rankings: rankView };
 async function router() {
-  clearInterval(timer); nav++;
+  clearInterval(timer); const gen = ++nav;
   const [r, arg] = location.hash.replace(/^#\/?/, '').split('/');
-  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.r === r));
-  cache.people = await api('/people');
-  refreshStatus();
-  try { await (routes[r] || home)(decodeURIComponent(arg || '')); } catch (e) { app.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  document.querySelectorAll('nav a').forEach(a => {
+    const on = a.dataset.r === r || (a.dataset.r === 'people' && r === 'p') || (a.dataset.r === 'dates' && r === 'd');
+    on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
+  });
+  // placeholder only if the page takes long enough to notice
+  const slow = setTimeout(() => { if (gen === nav) app.innerHTML = '<div class="skel" aria-busy="true" aria-label="Loading"><i></i><i></i><i></i><i></i></div>'; }, 180);
+  try {
+    cache.people = await api('/people');
+    refreshStatus();
+    await (routes[r] || home)(decodeURIComponent(arg || ''));
+    if (gen === nav) { scrollTo(0, 0); app.classList.remove('enter'); void app.offsetWidth; app.classList.add('enter'); }
+  } catch (e) { app.innerHTML = `<div class="err">${esc(e.message)}</div>`; } finally { clearTimeout(slow); }
 }
 addEventListener('hashchange', router); router();
 
+// ---------------- chat, shared by the home preview and the date page
+const bubble = (t, d, extra = '') => {
+  const id = t.speaker === 'a' ? d.a : d.b, who = nameOf(id);
+  return `<div class="msg ${t.speaker} ${extra}">${av(id, who, 30)}<div class="bub"><small>${esc(who)}’s agent</small>${esc(t.text)}${t.aside ? `<div class="think"><b>Private thought:</b> ${esc(t.aside)}</div>` : ''}</div></div>`;
+};
+const typing = (t, d) => { const id = t.speaker === 'a' ? d.a : d.b; return `<div class="msg ${t.speaker} is-typing">${av(id, nameOf(id), 30)}<div class="bub"><small>${esc(nameOf(id))}’s agent</small><span class="typing" aria-label="typing"><i></i><i></i><i></i></span></div></div>`; };
+const follow = el => { if (el.classList.contains('live-feed')) el.scrollTop = el.scrollHeight; else el.lastElementChild?.scrollIntoView({ block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' }); };
+async function play(el, d, turns, { instant, alive, stages = true }) {
+  el.innerHTML = ''; let stage = '';
+  for (const t of turns) {
+    if (!alive()) return false;
+    if (stages && t.stage !== stage) { stage = t.stage; el.insertAdjacentHTML('beforeend', `<div class="stage">${esc(STAGES[stage] || stage)}</div>`); }
+    if (!instant) { el.insertAdjacentHTML('beforeend', typing(t, d)); follow(el); await wait(700); if (!alive()) return false; el.querySelector('.is-typing')?.remove(); }
+    el.insertAdjacentHTML('beforeend', bubble(t, d, instant ? '' : 'new'));
+    if (!instant) { follow(el); await wait(900); }
+  }
+  return alive();
+}
+
 // ---------------- Home
 async function home() {
-  app.innerHTML = `<h1>Every person is an agent. The agents date each other.</h1>
-  <p class="sub">Paste a LinkedIn and a public Instagram link → your agent reads both → writes your profile → dates every other agent on your behalf → ranks who fits you best.</p>
-  <div class="row">
-   <div class="card"><h3>1 · Read</h3><p class="mut">Agent ingests exactly two sources — LinkedIn + public Instagram — and extracts needs, hobbies, interests, traits, with quoted evidence.</p><a class="btn" href="#/add">Add people</a></div>
-   <div class="card"><h3>2 · Date</h3><p class="mut">Every pair of agents goes on a 3-stage date (coffee → activity → deep talk). Each files a verdict for its own human.</p><a class="btn" href="#/dates">Watch the dates</a></div>
-   <div class="card"><h3>3 · Rank</h3><p class="mut">Each person gets a personal ranking of who fits best, blending their own verdict with how the other agent felt.</p><a class="btn" href="#/rankings">See rankings</a></div>
+  const matches = await api('/matches').catch(() => []);
+  const m = matches[0];
+  let d = null, prof = null, rk = [];
+  if (m) {
+    d = await api('/dates/' + m.key);
+    [prof, rk] = await Promise.all([api('/people/' + d.a), api('/rankings/' + d.a)]);
+  }
+  const n = cache.people.length;
+  const A = d && nameOf(d.a), B = d && nameOf(d.b);
+  // prefer a sentence-like quote over a dotted bio line; the quote itself is never edited
+  const withEv = prof ? [...prof.hobbies, ...prof.interests].filter(h => h.evidence?.length) : [];
+  const found = withEv.find(h => !/[·|•]/.test(h.evidence[0].quote) && h.evidence[0].quote.length > 24) || withEv[0];
+  const counts = d ? Object.entries(d.transcript.reduce((o, t) => (t.speaker && (o[t.stage] = (o[t.stage] || 0) + 1), o), {})) : [];
+  app.innerHTML = `<div class="hero"><div>
+    <h1>Your agent reads you, then goes on the dates.</h1>
+    <p class="lede">Paste a LinkedIn and a public Instagram. Your agent writes your profile, dates everyone else’s agent, and ranks your matches.</p>
+    <div class="actions"><a class="btn" href="#/add">Add people</a><a class="btn ghost" href="#/dates">Watch the dates</a></div>
   </div>
-  ${cache.people.length ? `<h2>Already run: ${cache.people.length} people</h2><p class="sub">A finished example is loaded. <a href="#/people">Open a profile</a> or <a href="#/rankings">jump to the rankings</a>.</p>` : ''}
-  ${cache.people.some(p => p.synthetic) ? `<div class="banner">The pre-loaded cohort is <b>synthetic</b> (invented people) so the demo runs without network access to LinkedIn/Instagram. Real people are added on the “Add people” page.</div>` : ''}`;
+  ${d ? `<div class="surface live" aria-label="A date between two agents, replayed">
+    <div class="live-head"><div class="who"><span class="pair">${av(d.a, A, 34)}${av(d.b, B, 34)}</span><span><b>${esc(A)} and ${esc(B)}</b><small>Coffee, replayed from the finished run</small></span></div><button class="ghost small" id="again" hidden>Replay</button></div>
+    <div class="live-feed" id="feed"></div>
+    <div class="live-foot" id="foot"><span>The agents are talking…</span></div></div>` : ''}</div>
+
+  ${n ? `<section><div class="sec-head"><h2>The cohort</h2><a href="#/people">All ${n} profiles</a></div>
+    <div class="cast">${cache.people.map(p => `<a href="#/p/${esc(p.id)}">${av(p.id, p.name, 44)}<span><b>${esc(p.name)}</b><small>${esc(p.headline)}</small></span></a>`).join('')}</div></section>` : ''}
+
+  <section><div class="sec-head"><h2>How it works</h2></div>
+    <div class="bento">
+      <div class="b1"><span class="step">1. Read</span><h3>Every claim keeps its quote.</h3>
+        <p class="mut">The agent reads two sources only, LinkedIn and Instagram, and ties each need, hobby and interest to the words that show it.</p>
+        ${found ? `<blockquote>“${esc(found.evidence[0].quote)}”<small>${esc(prof.name)} on ${srcName(found.evidence[0].source)}, read as ${esc(found.name)}</small></blockquote>` : ''}</div>
+      <div class="b2"><span class="step">2. Date</span><h3>Three rounds with every agent.</h3>
+        <p class="mut">Coffee, an activity, then a deep talk. Each agent files a verdict for its own person.</p>
+        ${counts.length ? `<div class="stages">${counts.map(([s, c]) => `<span class="chip line">${esc(STAGES[s] || s)}, ${c} turns</span>`).join('')}</div>` : ''}</div>
+      <div class="b3"><span class="step">3. Rank</span><h3>A ranking for each person.</h3>
+        <p class="mut">Their own agent’s verdict counts 65%, the other agent’s 35%.${rk.length ? ` Top three for ${esc(prof.name)}:` : ''}</p>
+        ${rk.length ? `<ol class="mini-rank">${rk.slice(0, 3).map(r => `<li>${av(r.id, r.name, 30)}<span>${esc(r.name)}</span><span class="num ${hi(r.fit)}">${r.fit}</span></li>`).join('')}</ol>` : ''}</div>
+    </div></section>
+
+  ${matches.length ? `<section><div class="sec-head"><h2>Strongest mutual matches</h2><a href="#/rankings">All rankings</a></div>
+    <div class="pairs">${matches.slice(0, 6).map(x => `<a href="#/d/${esc(x.key)}"><span class="pair">${av(x.a, x.aName, 36)}${av(x.b, x.bName, 36)}</span><span><b>${esc(x.aName)} and ${esc(x.bName)}</b><small>${esc((x.shared || []).slice(0, 3).join(', ') || 'Different worlds, strong verdicts')}</small></span><span class="num ${hi(x.score)}">${x.score}</span></a>`).join('')}</div></section>` : ''}
+
+  ${cache.people.some(p => p.synthetic) ? `<section><p class="note">The loaded cohort is synthetic: invented people, so the demo runs without reaching LinkedIn or Instagram. Real people are added on the Add people page.</p></section>` : ''}`;
+
+  if (!d) return;
+  const gen = nav, alive = () => gen === nav && !!$('#feed');
+  const turns = d.transcript.filter(t => t.speaker).slice(0, 4);
+  const run = async () => {
+    $('#again').hidden = true; $('#foot').innerHTML = '<span>The agents are talking…</span>';
+    if (!await play($('#feed'), d, turns, { instant: reduced(), alive, stages: false })) return;
+    $('#foot').innerHTML = `<span>Verdicts</span><span class="num ${hi(d.verdicts.a.score)}">${d.verdicts.a.score}</span><span class="num ${hi(d.verdicts.b.score)}">${d.verdicts.b.score}</span><a href="#/d/${esc(m.key)}">Watch the full date</a>`;
+    $('#again').hidden = false;
+  };
+  $('#again').onclick = run; run();
 }
 
 // ---------------- Add
 async function addView() {
-  app.innerHTML = `<h1>Add people</h1><p class="sub">One LinkedIn + one <b>public</b> Instagram per person. The agent will fetch and read both.</p>
-  <div class="card"><form id="f">
-    <div class="row"><div><label>LinkedIn URL</label><input id="li" placeholder="https://www.linkedin.com/in/username" required></div>
-    <div><label>Instagram URL (public)</label><input id="ig" placeholder="https://www.instagram.com/username/" required></div></div>
-    <details id="manual"><summary class="mut" style="cursor:pointer;margin-top:10px">If fetching is blocked: paste the visible profile text instead</summary>
-      <div class="row"><div><label>LinkedIn text (name, headline, location, about, experience…)</label><textarea id="lit" rows="6"></textarea></div>
-      <div><label>Instagram text (bio, then captions)</label><textarea id="igt" rows="6"></textarea></div></div></details>
-    <p><button id="go">Send my agent to read me</button></p><div id="out"></div></form></div>
-  <h2>Bulk add</h2><div class="card"><label>One person per line: <code>linkedin-url, instagram-url</code></label>
-    <textarea id="bulk" rows="5" placeholder="https://www.linkedin.com/in/a, https://www.instagram.com/a/"></textarea>
-    <p><button id="bgo" class="ghost">Add all</button></p><div id="bout"></div></div>
-  <h2>Current cohort (${cache.people.length})</h2>
-  <div class="card">${cache.people.length ? cache.people.map(p => `<span class="tag">${esc(p.name)} <a href="#/p/${esc(p.id)}">open</a></span>`).join('') : '<span class="mut">Nobody yet.</span>'}
-  <p><button class="ghost" id="clear">Remove everyone</button></p></div>`;
+  const n = cache.people.length;
+  app.innerHTML = `<div class="add"><div>
+    <h1>Add people</h1>
+    <p class="lede">Each person is two links. The agent fetches both public profiles, reads them, and writes the analysis.</p>
+    <div class="two-src">
+      <div><span class="dot" aria-hidden="true">in</span><span><b>LinkedIn</b><br><span class="mut">Headline, role, location, about and experience.</span></span></div>
+      <div><span class="dot" aria-hidden="true">IG</span><span><b>Instagram, public only</b><br><span class="mut">Bio and recent captions. Private profiles are rejected.</span></span></div>
+    </div>
+    <p class="note" style="margin-top:28px">If a site blocks the fetch, the form opens a box where you can paste the visible profile text instead.</p>
+  </div>
+  <form id="f" class="surface pad">
+    <h2>One person</h2>
+    <div class="field"><label for="li">LinkedIn URL</label><input id="li" type="url" placeholder="https://www.linkedin.com/in/username" required><span class="help">The public profile link.</span></div>
+    <div class="field"><label for="ig">Instagram URL</label><input id="ig" type="url" placeholder="https://www.instagram.com/username/" required><span class="help">The profile must be public.</span></div>
+    <details id="manual"><summary>Fetch blocked? Paste the profile text</summary>
+      <div class="row2"><div class="field"><label for="lit">LinkedIn text</label><textarea id="lit" rows="6"></textarea><span class="help">Name, headline, about, experience.</span></div>
+      <div class="field"><label for="igt">Instagram text</label><textarea id="igt" rows="6"></textarea><span class="help">Bio first, then captions.</span></div></div></details>
+    <div class="actions" style="margin-top:10px"><button id="go">Read this person</button></div>
+    <div id="out" aria-live="polite"></div>
+  </form></div>
+
+  <section><div class="sec-head"><h2>Add several at once</h2></div>
+    <div class="surface pad"><div class="field"><label for="bulk">One person per line</label>
+      <textarea id="bulk" rows="5" placeholder="https://www.linkedin.com/in/a, https://www.instagram.com/a/"></textarea><span class="help">LinkedIn URL, a comma, then the Instagram URL.</span></div>
+      <button id="bgo" class="ghost">Read everyone</button><div id="bout" aria-live="polite"></div></div></section>
+
+  <section><div class="sec-head"><h2>Current cohort <span class="mut">${n}</span></h2>${n ? '<button class="ghost small" id="clear">Remove everyone</button>' : ''}</div>
+    ${n ? `<div class="cohort">${cache.people.map(p => `<a class="chip line" href="#/p/${esc(p.id)}">${esc(p.name)}</a>`).join('')}</div>` : empty('Nobody here yet', 'Add a LinkedIn and Instagram pair above to create the first profile.')}</section>`;
+
   $('#f').onsubmit = async e => {
-    e.preventDefault(); const b = $('#go'); b.disabled = true; b.textContent = 'Agent reading…'; $('#out').innerHTML = '';
+    e.preventDefault(); const b = $('#go'); b.disabled = true; b.textContent = 'Reading LinkedIn and Instagram…'; $('#out').innerHTML = '';
     try {
       const p = await api('/people', { method: 'POST', body: { linkedinUrl: $('#li').value, instagramUrl: $('#ig').value, linkedinText: $('#lit').value, instagramText: $('#igt').value } });
       location.hash = '#/p/' + p.id;
     } catch (err) {
       $('#out').innerHTML = `<div class="err">${esc(err.message)}${err.linkedin ? `\nLinkedIn: ${esc(err.linkedin.error || 'ok')}\nInstagram: ${esc(err.instagram.error || 'ok')}` : ''}</div>`;
       if (err.needsManual) $('#manual').open = true;
-    } finally { b.disabled = false; b.textContent = 'Send my agent to read me'; }
+    } finally { b.disabled = false; b.textContent = 'Read this person'; }
   };
   $('#bgo').onclick = async () => {
     const rows = $('#bulk').value.split('\n').map(l => l.split(/[,\s]+/).filter(Boolean)).filter(a => a.length >= 2).map(([l, i]) => ({ linkedinUrl: l, instagramUrl: i }));
-    if (!rows.length) return; $('#bgo').disabled = true; $('#bout').innerHTML = '<span class="mut">Reading profiles…</span>';
-    const res = await api('/people/bulk', { method: 'POST', body: { rows } });
-    $('#bout').innerHTML = res.map(r => r.ok ? `<div class="ok">✓ ${esc(r.name)}</div>` : `<div class="err">✗ ${esc(r.row.linkedinUrl)} — ${esc(r.error)}</div>`).join('');
-    $('#bgo').disabled = false; router();
+    if (!rows.length) { $('#bout').innerHTML = '<div class="err">Enter at least one line with two links separated by a comma.</div>'; return; }
+    $('#bgo').disabled = true; $('#bgo').textContent = `Reading ${rows.length} ${rows.length === 1 ? 'person' : 'people'}…`; $('#bout').innerHTML = '';
+    try {
+      const res = await api('/people/bulk', { method: 'POST', body: { rows } });
+      $('#bout').innerHTML = '<div style="margin-top:14px">' + res.map(r => r.ok ? `<div class="okline">Added ${esc(r.name)}</div>` : `<div class="err">${esc(r.row.linkedinUrl)}: ${esc(r.error)}</div>`).join('') + '</div>';
+    } catch (err) { $('#bout').innerHTML = `<div class="err">${esc(err.message)}</div>`; }
+    $('#bgo').disabled = false; $('#bgo').textContent = 'Read everyone';
   };
-  $('#clear').onclick = async () => { if (confirm('Remove everyone?')) { for (const p of cache.people) await api('/people/' + p.id, { method: 'DELETE' }); router(); } };
+  const clr = $('#clear');
+  if (clr) confirmTwice(clr, `Click again to remove all ${n}`, async () => { for (const p of cache.people) await api('/people/' + p.id, { method: 'DELETE' }); router(); });
 }
 
 // ---------------- People
 function peopleView() {
-  app.innerHTML = `<h1>Profiles</h1><p class="sub">What each agent learned from LinkedIn + Instagram.</p>
-  ${cache.people.length ? '' : '<div class="card">No people yet — <a href="#/add">add some</a>.</div>'}
-  <div class="grid">${cache.people.map(p => `<div class="card pc" onclick="location.hash='#/p/${esc(p.id)}'"><b>${esc(p.name)}</b><small>${esc(p.headline)}</small><br><small>${esc(p.location)}</small>
-    <div>${p.hobbies.map(h => `<span class="tag">${esc(h)}</span>`).join('')}</div>${p.synthetic ? '<span class="tag amb">synthetic demo</span>' : ''}</div>`).join('')}</div>`;
+  app.innerHTML = `<h1>Profiles</h1><p class="lede">What each agent learned from one LinkedIn and one Instagram.</p>
+  ${cache.people.length ? `<div class="toolbar"><label class="sr" for="q">Search profiles</label><input id="q" type="search" placeholder="Search by name, role, city or hobby" autocomplete="off"></div>` : empty('No profiles yet', 'Add a person to see what their agent finds.', '<a class="btn" href="#/add">Add people</a>')}
+  <div class="people" id="grid"></div>`;
+  const card = p => `<a class="person" href="#/p/${esc(p.id)}"><span class="who">${av(p.id, p.name, 46)}<span><b>${esc(p.name)}</b><small>${esc(p.headline)}</small></span></span>
+    ${p.location ? `<span class="loc">${esc(p.location)}</span>` : ''}<span class="chips">${p.hobbies.map(h => `<span class="chip">${esc(h)}</span>`).join('')}${p.synthetic ? '<span class="chip demo">synthetic</span>' : ''}</span></a>`;
+  const draw = q => {
+    const t = q.trim().toLowerCase();
+    const list = cache.people.filter(p => !t || [p.name, p.headline, p.location, ...p.hobbies].join(' ').toLowerCase().includes(t));
+    $('#grid').innerHTML = list.length ? list.map(card).join('') : (cache.people.length ? `<p class="mut">No profile matches “${esc(q)}”.</p>` : '');
+  };
+  draw('');
+  $('#q')?.addEventListener('input', e => draw(e.target.value));
 }
 
 // ---------------- Profile
 async function profileView(id) {
-  const p = await api('/people/' + id);
-  const tr = Object.entries(p.traits).sort((a, b) => b[1] - a[1]);
+  const [p, rk] = await Promise.all([api('/people/' + id), api('/rankings/' + id)]);
   const L = { ambition: 'Ambition', curiosity: 'Curiosity', creativity: 'Creativity', sociability: 'Social energy', adventurousness: 'Adventurousness', introspection: 'Introspection', analytical: 'Analytical', warmth: 'Warmth', playfulness: 'Playfulness', routine: 'Routine' };
-  const items = arr => arr.map(h => `<div style="margin:6px 0"><span class="tag vio">${esc(h.name)}</span><span class="mut" style="font-size:12px">${Math.round(h.score * 100)}%</span>
-    ${h.evidence.slice(0, 1).map(e => `<div class="ev">${e.source}: “${esc(e.quote)}”</div>`).join('')}</div>`).join('') || '<span class="mut">None found</span>';
-  const rk = await api('/rankings/' + id);
-  app.innerHTML = `<a href="#/people">← all profiles</a>
-  <h1>${esc(p.name)} ${p.synthetic ? '<span class="tag amb">synthetic demo</span>' : ''}</h1>
-  <p class="sub">${esc(p.headline)} · ${esc(p.location)} · engine: ${esc(p.engine)} · confidence ${Math.round(p.confidence * 100)}%</p>
-  <p class="sub">Sources: <a href="${esc(p.links.linkedin)}" target="_blank" rel="noopener">LinkedIn</a> (${p.sources.linkedin.ok ? p.sources.linkedin.chars + ' chars via ' + esc(p.sources.linkedin.via) : 'unreadable'}) ·
-   <a href="${esc(p.links.instagram)}" target="_blank" rel="noopener">Instagram</a> (${p.sources.instagram.ok ? p.sources.instagram.chars + ' chars via ' + esc(p.sources.instagram.via) : 'unreadable'})</p>
-  <div class="card"><h3>Agent's read</h3><p>${esc(p.summary)}</p><p class="mut">Communication style: ${esc(p.communicationStyle)}${p.lookingFor ? ` · Stated: “${esc(p.lookingFor)}”` : ''} · Intent: ${esc(p.intent)}</p></div>
-  <div class="two"><div>
-    <h2>Needs</h2><div class="card">${p.needs.map(n => `<div style="margin:6px 0">${esc(n.need)}<div class="bar"><i style="width:${n.strength * 100}%"></i></div></div>`).join('')}</div>
-    <h2>Hobbies</h2><div class="card">${items(p.hobbies)}</div>
-    <h2>Interests</h2><div class="card">${items(p.interests)}</div>
-    <h2>How the agent read them</h2><div class="card">${p.reading.map(r => `<div class="read ${esc(r.source)}"><b>${esc(r.source)} · ${esc(r.step)}</b><br>${esc(r.finding)}</div>`).join('')}</div>
-  </div><div>
-    <h2>Qualities</h2><div class="card">${tr.map(([k, v]) => `<div class="tr"><span>${L[k]}</span><div class="bar"><i style="width:${v * 100}%"></i></div><span class="mut">${Math.round(v * 100)}</span></div>`).join('')}</div>
-    <h2>Values</h2><div class="card">${p.values.map(v => `<span class="tag pink">${esc(v)}</span>`).join('')}</div>
-    <h2>Green flags</h2><div class="card">${p.greenFlags.map(g => `<div class="ok">✓ ${esc(g)}</div>`).join('')}</div>
-    <h2>Watch-fors</h2><div class="card">${p.watchFor.map(g => `<div>⚠ ${esc(g)}</div>`).join('') || '<span class="mut">None spotted</span>'}</div>
-    <h2>Ideal first dates</h2><div class="card">${p.dateIdeas.map(g => `<div>• ${esc(g)}</div>`).join('')}</div>
-    <h2>Top matches</h2><div class="card">${rk.slice(0, 3).map(r => `<div><a href="#/d/${esc(keyOf(id, r.id))}">${r.rank}. ${esc(r.name)}</a> <span class="score ${cls(r.fit)}" style="font-size:15px">${r.fit}</span></div>`).join('') || '<span class="mut">Run the dating round first.</span>'}
-      <p><a href="#/rankings/${esc(id)}">Full ranking →</a></p></div>
-    <p><button class="ghost" id="del">Remove this person</button></p>
+  const evs = arr => arr.length ? `<div class="ev-grid">${arr.map(h => { const e = h.evidence?.[0]; return `<div class="ev"><div class="ev-head"><b>${esc(h.name)}</b><span>${pct(h.score)}% sure</span></div>
+    ${e ? `<q><mark>${esc(e.quote)}</mark></q><small>From ${srcName(e.source)}</small>` : '<small>No direct quote found</small>'}</div>`; }).join('')}</div>` : '<p class="mut">Nothing found in either source.</p>';
+  const src = k => `<div><dt><a href="${esc(p.links[k])}" target="_blank" rel="noopener">${srcName(k)}</a></dt><dd>${p.sources[k].ok ? `${p.sources[k].chars} characters` : 'unreadable'}</dd></div>`;
+  const ul = (arr, c = '') => arr.length ? `<ul class="list ${c}">${arr.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '<p class="mut">Nothing spotted.</p>';
+  app.innerHTML = `<a class="back" href="#/people">All profiles</a>
+  <div class="dossier"><aside class="idcard">
+    ${av(p.id, p.name, 88)}
+    <div><h1>${esc(p.name)}</h1><p class="mut" style="margin:8px 0 0">${esc(p.headline)}</p>${p.synthetic ? '<p style="margin:10px 0 0"><span class="chip demo">synthetic</span></p>' : ''}</div>
+    <dl class="facts">
+      <div><dt>Location</dt><dd>${esc(p.location || 'Not stated')}</dd></div>
+      <div><dt>Dating intent</dt><dd>${esc(p.intent)}</dd></div>
+      <div><dt>Confidence</dt><dd>${pct(p.confidence)}%</dd></div>
+      ${src('linkedin')}${src('instagram')}
+    </dl>
+    <div><h3>Best matches</h3>${rk.length ? `<div class="best">${rk.slice(0, 3).map(r => `<a href="#/d/${esc(keyOf(id, r.id))}">${av(r.id, r.name, 32)}<b>${esc(r.name)}</b><span class="num ${hi(r.fit)}">${r.fit}</span></a>`).join('')}</div><a href="#/rankings/${esc(id)}" style="font-size:14.5px">Full ranking</a>` : '<p class="mut">No dates yet. Run the dating round first.</p>'}</div>
+    <div><button class="ghost small" id="del">Remove this person</button></div>
+  </aside>
+  <div>
+    <p class="summary">${esc(p.summary)}</p>
+    <p class="mut">Talks like: ${esc(p.communicationStyle)}.${p.lookingFor ? ` In their own words: “${esc(p.lookingFor)}”.` : ''} Read by the ${esc(p.engine)} engine.</p>
+    <div class="block"><h2>Needs</h2><div class="needs">${p.needs.map(n => `<div class="need"><span>${esc(n.need)}</span><span>${pct(n.strength)}%</span><i class="ln" style="width:${pct(n.strength)}%"></i></div>`).join('') || '<p class="mut">No needs inferred.</p>'}</div></div>
+    <div class="block"><h2>Hobbies</h2>${evs(p.hobbies)}</div>
+    <div class="block"><h2>Interests</h2>${evs(p.interests)}</div>
+    <div class="block"><h2>Qualities</h2><div class="traits">${Object.entries(p.traits).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="trait ${v ? '' : 'zero'}"><span>${L[k] || esc(k)}</span><span class="num">${pct(v)}</span><i class="ln" style="width:${Math.max(pct(v), 1)}%"></i></div>`).join('')}</div></div>
+    <div class="block"><h2>Values and signals</h2>
+      <p>${p.values.map(v => `<span class="chip">${esc(v)}</span>`).join('')}</p>
+      <div class="split3" style="margin-top:18px"><div><h3>Green flags</h3>${ul(p.greenFlags)}</div><div><h3>Watch for</h3>${ul(p.watchFor, 'watch')}</div><div><h3>Ideal first dates</h3>${ul(p.dateIdeas)}</div></div></div>
+    <div class="block"><h2>How the agent read them</h2><ol class="trace">${p.reading.map(r => `<li class="${esc(r.source)}"><b>${srcName(r.source)}, ${esc(r.step)}</b>${esc(r.finding)}</li>`).join('')}</ol></div>
   </div></div>`;
-  $('#del').onclick = async () => { if (confirm('Remove?')) { await api('/people/' + id, { method: 'DELETE' }); location.hash = '#/people'; } };
+  confirmTwice($('#del'), 'Click again to remove', async () => { await api('/people/' + id, { method: 'DELETE' }); location.hash = '#/people'; });
 }
-const keyOf = (a, b) => (a < b ? `${a}__${b}` : `${b}__${a}`);
 
 // ---------------- Dates
 async function datesView() {
   const s = await refreshStatus();
-  app.innerHTML = `<h1>The agents date</h1><p class="sub">${cache.people.length} agents · ${cache.people.length * (cache.people.length - 1) / 2} first dates.</p>
-  <div class="card"><div class="row" style="align-items:end"><div><button id="run">▶ Run the dating round</button></div>
-   <div>${s.llm ? '<label><input type="checkbox" id="llm" style="width:auto"> Use Claude for each agent’s top-6 dates (slower)</label>' : '<span class="mut">Built-in agents (set ANTHROPIC_API_KEY for Claude-powered dates)</span>'}</div></div>
-   <div id="prog" style="margin-top:12px"></div><div class="feed" id="feed"></div></div>
-  <h2>Watch a date</h2><div class="card"><div class="row"><div><label>Agent A</label><select id="sa">${cache.people.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></div>
-  <div><label>Agent B</label><select id="sb">${cache.people.map((p, i) => `<option value="${esc(p.id)}" ${i === 1 ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div></div>
-  <p><button class="ghost" id="watch">Watch this date</button></p></div>
-  <h2>All dates</h2><div class="card"><select id="flt"><option value="">Everyone</option>${cache.people.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select><div id="list"></div></div>`;
-  $('#watch').onclick = () => { const a = $('#sa').value, b = $('#sb').value; if (a !== b) location.hash = '#/d/' + keyOf(a, b); };
+  const n = cache.people.length;
+  const opts = sel => cache.people.map((p, i) => `<option value="${esc(p.id)}" ${i === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  app.innerHTML = `<h1>The agents date</h1><p class="lede">${n} agents and ${n * (n - 1) / 2} first dates. Every date runs coffee, an activity and a deep talk.</p>
+  <div class="surface pad"><div class="runbar"><button id="run">Run the dating round</button>
+    <div class="mut" style="font-size:14.5px">${s.llm ? '<label style="display:inline-flex;gap:10px;align-items:center;margin:0;font-weight:500;color:var(--ink)"><input type="checkbox" id="llm" style="width:auto"> Let Claude write each agent’s top 6 dates (slower)</label>' : 'Built-in agents write the dates. Set ANTHROPIC_API_KEY on the server to let Claude write them.'}</div></div>
+    <div id="prog" aria-live="polite"></div><div class="feed" id="feed"></div></div>
+  <section><div class="sec-head"><h2>Watch a date</h2></div>
+    <div class="surface pad"><div class="picker"><div class="field"><label for="sa">First agent</label><select id="sa">${opts(0)}</select></div>
+    <div class="field"><label for="sb">Second agent</label><select id="sb">${opts(1)}</select></div><button class="ghost" id="watch">Watch date</button></div><div id="wout"></div></div></section>
+  <section><div class="sec-head"><h2>All dates</h2><div style="min-width:240px"><label for="flt" class="sr">Filter by person</label><select id="flt"><option value="">Everyone</option>${opts(-1)}</select></div></div>
+    <div id="list" class="scroll"></div></section>`;
+  $('#watch').onclick = () => { const a = $('#sa').value, b = $('#sb').value; if (a === b) { $('#wout').innerHTML = '<div class="err">Pick two different agents.</div>'; return; } location.hash = '#/d/' + keyOf(a, b); };
   const load = async () => {
-    const ds = await api('/dates?person=' + encodeURIComponent($('#flt').value));
-    $('#list').innerHTML = `<table><tr><th>Date</th><th>A’s verdict</th><th>B’s verdict</th></tr>${ds.sort((x, y) => (y.scoreA + y.scoreB) - (x.scoreA + x.scoreB)).slice(0, 60).map(d => `<tr><td><a href="#/d/${esc(d.key)}">${esc(nameOf(d.a))} × ${esc(nameOf(d.b))}</a></td><td class="${cls(d.scoreA)}">${d.scoreA}</td><td class="${cls(d.scoreB)}">${d.scoreB}</td></tr>`).join('')}</table>`;
+    const ds = (await api('/dates?person=' + encodeURIComponent($('#flt').value))).sort((x, y) => (y.scoreA + y.scoreB) - (x.scoreA + x.scoreB));
+    $('#list').innerHTML = ds.length ? `<table><thead><tr><th>Date</th><th>First verdict</th><th>Second verdict</th></tr></thead><tbody>${ds.slice(0, 60).map(d => `<tr><td><a class="who" href="#/d/${esc(d.key)}"><span class="pair">${av(d.a, nameOf(d.a), 28)}${av(d.b, nameOf(d.b), 28)}</span>${esc(nameOf(d.a))} and ${esc(nameOf(d.b))}</a></td><td class="num ${hi(d.scoreA)}">${d.scoreA}</td><td class="num ${hi(d.scoreB)}">${d.scoreB}</td></tr>`).join('')}</tbody></table>
+      ${ds.length > 60 ? `<p class="mut" style="margin-top:14px;font-size:14px">Showing the 60 highest of ${ds.length} dates.</p>` : ''}` : empty('No dates yet', 'Run the dating round to send the agents out.');
   };
   $('#flt').onchange = load; load();
   const poll = async () => {
     const j = await api('/run/status');
-    if (j.total) $('#prog').innerHTML = `<div class="bar"><i style="width:${j.done / j.total * 100}%"></i></div><small class="mut">${j.done}/${j.total} dates ${j.running ? 'in progress…' : 'complete'}${j.error ? ' — ' + esc(j.error) : ''}</small>`;
-    $('#feed').innerHTML = j.recent.map(r => `<div><a href="#/d/${esc(r.key)}">${esc(r.a)} ♥ ${esc(r.b)}</a> — <span class="${cls(r.scoreA)}">${r.scoreA}</span> / <span class="${cls(r.scoreB)}">${r.scoreB}</span> <span class="mut">(${esc(r.engine)})</span></div>`).join('');
-    if (!j.running && $('#run').disabled) { $('#run').disabled = false; load(); refreshStatus(); }
-    return j.running;
+    if (j.total) $('#prog').innerHTML = `<div class="prog"><i style="width:${j.done / j.total * 100}%"></i></div><p class="mut" style="font-size:14px;margin:8px 0 0">${j.done} of ${j.total} dates ${j.running ? 'in progress' : 'complete'}${j.error ? ': ' + esc(j.error) : ''}</p>`;
+    $('#feed').innerHTML = (j.recent || []).map(r => `<div><a href="#/d/${esc(r.key)}">${esc(r.a)} and ${esc(r.b)}</a><span class="num ${hi(r.scoreA)}">${r.scoreA}</span><span class="num ${hi(r.scoreB)}">${r.scoreB}</span><span class="mut">${esc(r.engine)}</span></div>`).join('');
+    if (!j.running && $('#run').disabled) { $('#run').disabled = false; $('#run').textContent = 'Run the dating round'; load(); refreshStatus(); }
   };
   timer = setInterval(poll, 500); poll();
   $('#run').onclick = async () => {
-    $('#run').disabled = true;
-    try { await api('/run', { method: 'POST', body: { useLLM: !!$('#llm')?.checked } }); } catch (e) { $('#prog').innerHTML = `<div class="err">${esc(e.message)}</div>`; $('#run').disabled = false; }
+    $('#run').disabled = true; $('#run').textContent = 'Agents are dating…';
+    try { await api('/run', { method: 'POST', body: { useLLM: !!$('#llm')?.checked } }); } catch (e) { $('#prog').innerHTML = `<div class="err">${esc(e.message)}</div>`; $('#run').disabled = false; $('#run').textContent = 'Run the dating round'; }
   };
 }
 
@@ -151,44 +268,50 @@ async function datesView() {
 async function dateView(key) {
   const d = await api('/dates/' + key);
   const A = nameOf(d.a), B = nameOf(d.b);
-  const vbox = (n, v) => `<div class="card"><h3>${esc(n)}’s agent verdict</h3><div class="score ${cls(v.score)}">${v.score}/100</div><div><b>${esc(v.headline)}</b> ${v.wouldSeeAgain ? '<span class="tag grn">would see again</span>' : '<span class="tag amb">pass</span>'}</div>
-    ${v.pros.map(x => `<div class="ok">+ ${esc(x)}</div>`).join('')}${v.cons.map(x => `<div style="color:var(--red)">− ${esc(x)}</div>`).join('')}</div>`;
-  app.innerHTML = `<a href="#/dates">← all dates</a><h1>${esc(A)} × ${esc(B)}</h1>
-  <p class="sub">Agents: <a href="#/p/${esc(d.a)}">${esc(A)}</a> (pink) and <a href="#/p/${esc(d.b)}">${esc(B)}</a> (violet) · engine: ${esc(d.engine)}${d.shared.length ? ' · shared: ' + d.shared.map(esc).join(', ') : ''}</p>
-  <p><button id="replay" class="ghost">↻ Replay live</button> <button id="skip" class="ghost">Show all</button></p>
-  <div class="card"><div class="chat" id="chat"></div></div><div id="verdicts" class="row" style="margin-top:12px"></div>`;
+  const vbox = (side, name, v) => `<div class="verdict ${side}"><h3>${esc(name)}’s agent</h3><div class="score"><span class="num ${hi(v.score)}">${v.score}</span><span class="mut">/100</span></div>
+    <p>${esc(v.headline)}</p><div>${v.wouldSeeAgain ? '<span class="chip acc">Would see again</span>' : '<span class="chip line">Would pass</span>'}</div>
+    ${v.pros.length ? `<ul class="list">${v.pros.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}${v.cons.length ? `<ul class="list watch" style="margin-top:8px">${v.cons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`;
+  app.innerHTML = `<a class="back" href="#/dates">All dates</a>
+  <div class="date"><div>
+    <h1 style="font-size:clamp(30px,4vw,50px)">${esc(A)} and ${esc(B)}</h1>
+    <p class="lede" style="margin-bottom:22px">${d.shared.length ? `They share ${esc(d.shared.join(', '))}.` : 'No obvious shared interests going in.'} Written by the ${esc(d.engine)} engine.</p>
+    <div class="actions" style="margin-bottom:18px"><button class="ghost small" id="replay">Replay</button><button class="ghost small" id="skip">Show the whole date</button></div>
+    <div class="surface chat" id="chat" aria-live="off"></div>
+  </div>
+  <aside class="card-side">
+    <div class="side-who">
+      <a class="who" href="#/p/${esc(d.a)}">${av(d.a, A, 44)}<span><b class="tag-a">${esc(A)}</b><small>Their agent speaks in blue</small></span></a>
+      <a class="who" href="#/p/${esc(d.b)}">${av(d.b, B, 44)}<span><b>${esc(B)}</b><small>Their agent speaks in grey</small></span></a>
+    </div>
+    <div id="verdicts" style="display:grid;gap:14px"><p class="pending">Each agent files a verdict when the date ends.</p></div>
+  </aside></div>`;
   let token = 0; const gen = nav;
-  const alive = my => my === token && gen === nav && $('#chat');
-  const play = async instant => {
-    const my = ++token; $('#chat').innerHTML = ''; $('#verdicts').innerHTML = ''; let stage = '';
-    for (const t of d.transcript) {
-      if (!alive(my)) return;
-      if (t.stage !== stage) { stage = t.stage; $('#chat').insertAdjacentHTML('beforeend', `<div class="stage">${esc({ coffee: '☕ Coffee', activity: '🎯 Activity date', 'deep-talk': '🌙 Deep talk' }[stage] || stage)}</div>`); }
-      const who = t.speaker === 'a' ? A : B;
-      if (!instant) { $('#chat').insertAdjacentHTML('beforeend', `<div class="msg ${t.speaker}" id="typing"><small>${esc(who)}’s agent</small><span class="mut">typing…</span></div>`); $('#chat').scrollTop = 1e9; await new Promise(r => setTimeout(r, 650)); if (!alive(my)) return; $('#typing').remove(); }
-      $('#chat').insertAdjacentHTML('beforeend', `<div class="msg ${t.speaker}"><small>${esc(who)}’s agent</small>${esc(t.text)}${t.aside ? `<div class="aside">🧠 ${esc(t.aside)}</div>` : ''}</div>`);
-      $('#chat').scrollTop = 1e9;
-      if (!instant) await new Promise(r => setTimeout(r, 900));
-    }
-    if (!alive(my)) return;
-    $('#verdicts').innerHTML = vbox(A, d.verdicts.a) + vbox(B, d.verdicts.b);
+  const run = async instant => {
+    const my = ++token; $('#verdicts').innerHTML = '<p class="pending">Each agent files a verdict when the date ends.</p>';
+    if (!await play($('#chat'), d, d.transcript, { instant: instant || reduced(), alive: () => my === token && gen === nav && !!$('#chat') })) return;
+    $('#verdicts').innerHTML = vbox('a', A, d.verdicts.a) + vbox('b', B, d.verdicts.b);
   };
-  $('#replay').onclick = () => play(false); $('#skip').onclick = () => play(true);
-  play(false);
+  $('#replay').onclick = () => run(false); $('#skip').onclick = () => run(true);
+  run(false);
 }
 
 // ---------------- Rankings
 async function rankView(id) {
-  const matches = await api('/matches');
   id = id || cache.people[0]?.id;
-  if (!id) { app.innerHTML = '<div class="card">No people yet.</div>'; return; }
-  const rows = await api('/rankings/' + id);
-  app.innerHTML = `<h1>Rankings</h1><p class="sub">For each person: who fits best. Fit = 65% their own agent’s verdict + 35% the other agent’s verdict.</p>
-  <div class="card"><label>Rank for</label><select id="who">${cache.people.map(p => `<option value="${esc(p.id)}" ${p.id === id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
-  ${rows.length ? '' : '<div class="banner">No dates yet — <a href="#/dates">run the dating round</a>.</div>'}
-  <div>${rows.map(r => `<div class="card rk"><div class="n">${r.rank}</div><div><b><a href="#/p/${esc(r.id)}">${esc(r.name)}</a></b> ${r.mutual ? '<span class="tag pink">mutual match</span>' : ''}<br><small class="mut">${esc(r.headline)}</small>
-    <div>${r.shared.map(s => `<span class="tag vio">${esc(s)}</span>`).join('')}</div><small class="ok">${r.why.map(esc).join(' · ')}</small>${r.watch.length ? `<br><small style="color:var(--amb)">⚠ ${r.watch.map(esc).join(' · ')}</small>` : ''}</div>
-    <div style="text-align:right"><div class="score ${cls(r.fit)}">${r.fit}</div><small class="mut">you ${r.myScore} · them ${r.theirScore}</small><br><a href="#/d/${esc(keyOf(id, r.id))}">watch date →</a></div></div>`).join('')}</div>
-  <h2>Top mutual matches (whole cohort)</h2><div class="card"><table><tr><th>Pair</th><th>Score</th><th>Shared</th></tr>${matches.slice(0, 15).map(m => `<tr><td><a href="#/d/${esc(m.key)}">${esc(m.aName)} × ${esc(m.bName)}</a></td><td class="${cls(m.score)}">${m.score}</td><td>${(m.shared || []).map(esc).join(', ')}</td></tr>`).join('')}</table></div>`;
+  if (!id) { app.innerHTML = `<h1>Rankings</h1>${empty('No people yet', 'Add people and run the dating round to see rankings.', '<a class="btn" href="#/add">Add people</a>')}`; return; }
+  const [rows, matches] = await Promise.all([api('/rankings/' + id), api('/matches')]);
+  const pod = r => `<div class="pod"><div class="rank-n"><span class="mut">No. ${r.rank}</span><span class="num">${r.fit}</span></div>
+    <a class="who" href="#/p/${esc(r.id)}" style="text-decoration:none">${av(r.id, r.name, 44)}<span><b>${esc(r.name)}</b><small>${esc(r.headline)}</small></span></a>
+    <div>${r.mutual ? '<span class="chip acc">Mutual match</span>' : ''}${r.shared.slice(0, 3).map(s => `<span class="chip line">${esc(s)}</span>`).join('')}</div>
+    ${r.why.length ? `<p class="why">${esc(r.why.join('. '))}.</p>` : ''}${r.watch.length ? `<p class="why mut">Watch for: ${esc(r.watch.join(', '))}.</p>` : ''}
+    <div class="foot"><span class="mut">You ${r.myScore}, them ${r.theirScore}</span><a href="#/d/${esc(keyOf(id, r.id))}">Watch the date</a></div></div>`;
+  const row = r => `<div class="rrow"><span class="n">${r.rank}</span>
+    <a class="who" href="#/p/${esc(r.id)}" style="text-decoration:none">${av(r.id, r.name, 36)}<span><b>${esc(r.name)}${r.mutual ? ' <span class="chip acc" style="height:22px;font-size:12px;margin:0 0 0 6px">Mutual</span>' : ''}</b><small>${esc(r.shared.slice(0, 3).join(', ') || r.headline)}</small></span></a>
+    <span class="split">You ${r.myScore}, them ${r.theirScore}</span><a class="num big ${hi(r.fit)}" href="#/d/${esc(keyOf(id, r.id))}" style="text-decoration:none" aria-label="Fit ${r.fit}, watch the date">${r.fit}</a></div>`;
+  app.innerHTML = `<div class="rk-head"><div><h1>Rankings</h1><p class="lede" style="margin:0">Who fits each person best. Their own agent’s verdict counts 65% and the other agent’s 35%. Both verdicts at 65 or above makes a mutual match.</p></div>
+    <div class="field" style="margin:0"><label for="who">Ranking for</label><select id="who">${cache.people.map(p => `<option value="${esc(p.id)}" ${p.id === id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div></div>
+  ${rows.length ? `<div class="podium">${rows.slice(0, 3).map(pod).join('')}</div><div class="rest">${rows.slice(3).map(row).join('')}</div>` : empty('No dates yet', 'Run the dating round to create rankings.', '<a class="btn" href="#/dates">Go to dates</a>')}
+  ${matches.length ? `<section><div class="sec-head"><h2>Top mutual matches across everyone</h2></div>
+    <div class="scroll"><table><thead><tr><th>Pair</th><th>Score</th><th>Shared</th></tr></thead><tbody>${matches.slice(0, 15).map(m => `<tr><td><a class="who" href="#/d/${esc(m.key)}"><span class="pair">${av(m.a, m.aName, 28)}${av(m.b, m.bName, 28)}</span>${esc(m.aName)} and ${esc(m.bName)}</a></td><td class="num ${hi(m.score)}">${m.score}</td><td class="mut">${esc((m.shared || []).join(', '))}</td></tr>`).join('')}</tbody></table></div></section>` : ''}`;
   $('#who').onchange = e => { location.hash = '#/rankings/' + e.target.value; };
 }

@@ -1,5 +1,6 @@
 // Builds data/db.json: 25 synthetic personas -> analyzed -> every pair dated -> rankings.
-process.env.DB_FILE ||= new URL('../data/db.json', import.meta.url).pathname;
+import { fileURLToPath } from 'node:url';
+process.env.DB_FILE ||= fileURLToPath(new URL('../data/db.json', import.meta.url));
 const store = await import('../lib/store.js');
 const { addPerson } = await import('../lib/pipeline.js');
 const { runDate, buildRankings } = await import('../lib/date.js');

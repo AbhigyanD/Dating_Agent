@@ -5,12 +5,14 @@ const out = 'docs';
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });
 for (const f of ['app.js', 'style.css']) fs.copyFileSync(`public/${f}`, `${out}/${f}`);
+fs.cpSync('public/fonts', `${out}/fonts`, { recursive: true });
 fs.copyFileSync('data/db.json', `${out}/db.json`);
 fs.writeFileSync(`${out}/.nojekyll`, '');
 
 // Relative asset paths so it works under https://user.github.io/<repo>/
 const html = fs.readFileSync('public/index.html', 'utf8')
   .replace('href="/style.css"', 'href="style.css"')
+  .replace('href="/fonts/geist.woff2"', 'href="fonts/geist.woff2"')
   .replace('<script src="/app.js" type="module"></script>', '<script src="static-api.js"></script>\n<script src="app.js" type="module"></script>');
 fs.writeFileSync(`${out}/index.html`, html);
 
