@@ -1,40 +1,133 @@
-# 💘 Agentic Dating
+# Agentic Dating
 
-**Every person is an agent. The agents date each other. Everyone gets a ranking.**
+**Your agent reads you, then goes on the dates for you.**
+
+Give the site two links, your LinkedIn and your public Instagram. An AI agent reads both, works out what you need in a partner, what you do for fun and what you care about, then goes on a date with every other person's agent. At the end you get your own ranking of who fits you best, and you can read every date it went on.
+
+| | |
+|---|---|
+| Watch the video (3 min) | _add YouTube link_ |
+| Try the finished demo | _add demo link_ |
+| Use the live site | _add live site link_ |
+
+---
+
+## How to use it
+
+### 1. Add people
+
+Go to **Add people** and paste two links for each person:
+
+- their **LinkedIn** profile
+- their **Instagram** profile, which must be **public**
+
+Click **Read this person**. Their agent fetches both profiles and reads them. It takes a few seconds.
+
+Adding a group? Use **Add several at once** and paste one person per line, like this:
 
 ```
-LinkedIn (public) + Instagram (public)  →  Agent reads  →  Profile page (needs · hobbies · interests · traits, with quoted evidence)
-                                                     →  Agents date (coffee → activity → deep talk, every pair)  →  Personal rankings
+https://www.linkedin.com/in/someone, https://www.instagram.com/someone/
 ```
 
-## Run it
+**If it says the profile couldn't be read:** LinkedIn and Instagram sometimes block the fetch. Open **Fetch blocked? Paste the profile text**, copy what you can see on their profile (name, headline, about, bio, a few captions) and paste it in. The agent reads that instead.
+
+### 2. Read the profile
+
+Each person gets a profile page showing what their agent found:
+
+- **A short summary** of who they are
+- **Needs:** what they seem to need from a partner, and how strongly
+- **Hobbies and interests**, each with the **exact quote** from their LinkedIn or Instagram that shows it, highlighted, so you can see why the agent thinks so
+- **Qualities:** 10 personality scores, such as ambition, warmth, curiosity and playfulness
+- **Values, green flags, things to watch for, and ideal first dates**
+- **How the agent read them:** a step-by-step log of what it noticed in each source
+
+### 3. Let the agents date
+
+Go to **Dates** and click **Run the dating round**. Every agent goes on a date with every other agent. A progress bar shows how far along it is.
+
+To watch one, pick two people under **Watch a date**. The date plays out like a chat in three rounds:
+
+1. **Coffee:** introductions and first questions
+2. **An activity:** one agent suggests something based on what the two share
+3. **A deep talk:** each agent checks whether the other person can give its person what they need, and raises any concerns honestly
+
+Under every message you can see that agent's **private thought**: what it was really thinking and why it said what it did.
+
+When the date ends, each agent gives its verdict **for its own person**: a score out of 100, what went well, what didn't, and whether it would go on a second date. The two agents don't always agree, just like real dates.
+
+### 4. See the rankings
+
+Go to **Rankings** and pick a person. Everyone else is ranked for them, best fit first. The top three come with the reasons: what they share, which needs are met and what to watch out for.
+
+**How the score works:** your own agent's opinion counts most (65%), and the other agent's opinion counts too (35%). When both agents score the date 65 or higher, it's a **mutual match**.
+
+You can click **Watch the date** on any match to see exactly how it went.
+
+---
+
+## What the agent looks at
+
+**Only two things: your LinkedIn and your Instagram.** No other websites, no searching around, no private messages.
+
+- From **LinkedIn**: your headline, role, location, about section and experience
+- From **Instagram**: your bio and recent captions
+
+Every conclusion on your profile points back to the words that led to it, so nothing is a black box.
+
+---
+
+## Questions
+
+**Why does it say "synthetic" on the demo people?**
+The finished demo uses 25 invented people, so it works without contacting LinkedIn or Instagram. Anything you add yourself is real.
+
+**Why was my Instagram rejected?**
+It's probably private. The agent only reads public profiles.
+
+**The profile couldn't be read. What now?**
+Use the paste box on the Add people page. See step 1.
+
+**Is the date a real conversation?**
+It's a conversation between the two agents, built from what each one learned about its person. With the Claude AI option switched on, the best matches get a date written freely by the AI.
+
+**Does it consider gender, orientation or age?**
+Not yet. Everyone is matched with everyone.
+
+**Can I remove someone?**
+Yes. Open their profile and click **Remove this person** (click twice to confirm).
+
+---
+
+## Privacy and consent
+
+Only add people who have agreed to it. The agent reads public profiles, but a dating analysis of someone is personal. Ask first.
+
+The public demo contains no real people.
+
+---
+
+## For developers
+
+Run it yourself (Node 20+, no installs needed):
+
 ```bash
-node server.js          # http://localhost:3000  — zero npm dependencies, Node ≥ 20
-node scripts/smoke.mjs  # optional browser smoke test (needs playwright)
+git clone https://github.com/AbhigyanD/Dating_Agent.git
+cd Dating_Agent
+node server.js     # then open http://localhost:3000
 ```
-`data/db.json` ships pre-run (25 people, 300 dates) so you can look before typing anything.
 
-Optional env: `ANTHROPIC_API_KEY` (Claude-written analysis + Claude-scripted dates), `APIFY_TOKEN` (robust LinkedIn/Instagram scraping), `CLAUDE_MODEL`, `PORT`.
+Optional settings:
 
-## Using the site
-1. **Add people** – paste a LinkedIn URL + a public Instagram URL (single or bulk, one `linkedin, instagram` pair per line). If the sites block the fetch, the form tells you why and opens a paste-the-text fallback.
-2. **Profiles** – analysis page: summary, needs, hobbies, interests (each with a quote from the source), 10 trait scores, values, green flags, watch-fors, date ideas, plus a "how the agent read them" log.
-3. **Dates** – *Run the dating round* (live progress + feed) and *Watch a date* (animated replay with each agent's private reasoning aside and final verdicts).
-4. **Rankings** – pick anyone → ranked list of all others. Fit = 65% own agent's verdict + 35% the other agent's. "Mutual match" = both verdicts ≥ 65. Plus a cohort-wide leaderboard.
+- `ANTHROPIC_API_KEY`: lets Claude write the profile analysis and each agent's top 6 dates
+- `APIFY_TOKEN`: much more reliable LinkedIn and Instagram reading (both sites block most direct requests)
 
-## How it works
-* **Ingest (`lib/scrape.js`)** – strictly two sources per person. Providers in order: Apify actors → direct public fetch (Instagram `web_profile_info` JSON, then `og:` meta; LinkedIn JSON-LD/`og:`) → user-pasted text. Private Instagram profiles are rejected.
-* **Analyze (`lib/analyze.js`)** – lexicon engine over both texts: 37 interests/hobbies, 10 traits, 12 inferable needs, stated intent. Every claim keeps the quote and the source that produced it. With a Claude key, Claude rewrites the qualitative fields over the same evidence.
-* **Date (`lib/date.js`)** – a directional compatibility model (how well does B satisfy A's weighted needs, shared interests, trait alignment, location, intent) drives a 3-stage scripted date. Dialogue is assembled from each person's actual evidence; each turn carries the agent's private note. Each agent files a verdict *for its own human*, so A→B ≠ B→A. With Claude enabled, each agent's top-6 pre-screened pairs get a fully LLM-written date.
-* **Rank (`buildRankings`)** – per person, blend own verdict with the counterpart's.
+More:
 
-## Honest limitations
-* LinkedIn and Instagram aggressively block anonymous scraping and their ToS restrict it. Expect to need `APIFY_TOKEN` or the paste fallback. Scraping real people should be done only with their consent.
-* **The bundled demo cohort is 25 synthetic personas, not real people** (`scripts/personas.mjs`), because the build environment could not reach either site. To run real people: fill `data/cohort.csv`, then `APIFY_TOKEN=… node scripts/ingest.mjs`.
-* Without an Anthropic key the dates are template-assembled (grounded, deterministic), not free-form LLM conversation. The Claude path is implemented but was not exercised in the build environment.
-* Gender/orientation preferences are not modeled.
+- **Refresh the demo copy:** `node scripts/build-static.mjs` writes a read-only version to `docs/` for GitHub Pages.
+- **Deploy the live site:** `render.yaml` sets it up on Render.
+- **Load a real group:** fill in `data/cohort.csv`, then run `APIFY_TOKEN=... node scripts/ingest.mjs`.
 
-## Submission copy
-**200-char summary:** Paste a LinkedIn + public Instagram; an agent reads you, writes a needs/hobbies/interests profile, dates every other agent on your behalf, and ranks who fits you best.
+**Tech stack.** Instagram and LinkedIn are scraped with Apify (`apify/instagram-profile-scraper`, `harvestapi/linkedin-profile-scraper`). If that fails, it falls back to Instagram's public profile endpoint, reading the public page tags, and finally user-pasted text. The analysis and dates run on a built-in Node engine, with the Claude API as an option. The server is plain Node with no dependencies; the site is vanilla JavaScript.
 
-**Tech (scraping):** Node 22, zero-dependency HTTP server; scraping via Apify (instagram-profile-scraper, harvestapi linkedin-profile-scraper) with fallbacks to Instagram's public web_profile_info endpoint, og:/JSON-LD parsing, and pasted text. Analysis/dates: Claude API (optional) + built-in engine. Frontend: vanilla JS SPA.
+**In one line (200 characters):** Paste a LinkedIn + public Instagram; an agent reads you, writes a needs/hobbies/interests profile, dates every other agent on your behalf, and ranks who fits you best.
